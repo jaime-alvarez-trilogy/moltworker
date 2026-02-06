@@ -101,19 +101,24 @@ export async function ensureMoltbotGateway(sandbox: Sandbox, env: MoltbotEnv): P
     await process.waitForPort(MOLTBOT_PORT, { mode: 'tcp', timeout: STARTUP_TIMEOUT_MS });
     console.log('[Gateway] Moltbot gateway is ready!');
 
+    // Avoid dumping startup logs to worker logs because they may contain secrets.
     const logs = await process.getLogs();
-    if (logs.stdout) console.log('[Gateway] stdout:', logs.stdout);
-    if (logs.stderr) console.log('[Gateway] stderr:', logs.stderr);
+    const stdoutLen = logs.stdout?.length ?? 0;
+    const stderrLen = logs.stderr?.length ?? 0;
+    if (stdoutLen > 0 || stderrLen > 0) {
+      console.log('[Gateway] Startup logs captured', { stdoutLen, stderrLen });
+    }
   } catch (e) {
     console.error('[Gateway] waitForPort failed:', e);
     try {
       const logs = await process.getLogs();
-      console.error('[Gateway] startup failed. Stderr:', logs.stderr);
-      console.error('[Gateway] startup failed. Stdout:', logs.stdout);
-      throw new Error(`Moltbot gateway failed to start. Stderr: ${logs.stderr || '(empty)'}`);
+      const stdoutLen = logs.stdout?.length ?? 0;
+      const stderrLen = logs.stderr?.length ?? 0;
+      console.error('[Gateway] startup failed. Log sizes:', { stdoutLen, stderrLen, exitCode: process.exitCode });
+      throw new Error('Moltbot gateway failed to start. Check admin/debug logs for detailed diagnostics.');
     } catch (logErr) {
       console.error('[Gateway] Failed to get logs:', logErr);
-      throw e;
+      throw new Error('Moltbot gateway failed to start and process logs could not be retrieved.');
     }
   }
 

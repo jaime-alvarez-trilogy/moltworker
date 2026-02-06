@@ -6,6 +6,16 @@ import { R2_MOUNT_PATH } from '../config';
 
 // CLI commands can take 10-15 seconds to complete due to WebSocket connection overhead
 const CLI_TIMEOUT_MS = 20000;
+const DEVICE_REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+function isValidDeviceRequestId(requestId: unknown): requestId is string {
+  return typeof requestId === 'string' && DEVICE_REQUEST_ID_PATTERN.test(requestId);
+}
+
+function shellEscapeArg(value: string): string {
+  // Wrap in single quotes and escape any embedded single quotes.
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 
 /**
  * API routes
@@ -79,13 +89,17 @@ adminApi.post('/devices/:requestId/approve', async (c) => {
   if (!requestId) {
     return c.json({ error: 'requestId is required' }, 400);
   }
+  if (!isValidDeviceRequestId(requestId)) {
+    return c.json({ error: 'Invalid requestId format' }, 400);
+  }
 
   try {
     // Ensure moltbot is running first
     await ensureMoltbotGateway(sandbox, c.env);
 
     // Run moltbot CLI to approve the device (CLI is still named clawdbot)
-    const proc = await sandbox.startProcess(`clawdbot devices approve ${requestId} --url ws://localhost:18789`);
+    const safeRequestId = shellEscapeArg(requestId);
+    const proc = await sandbox.startProcess(`clawdbot devices approve ${safeRequestId} --url ws://localhost:18789`);
     await waitForProcess(proc, CLI_TIMEOUT_MS);
 
     const logs = await proc.getLogs();
@@ -143,17 +157,28 @@ adminApi.post('/devices/approve-all', async (c) => {
     const results: Array<{ requestId: string; success: boolean; error?: string }> = [];
 
     for (const device of pending) {
+      const requestId = device.requestId;
+      if (!isValidDeviceRequestId(requestId)) {
+        results.push({
+          requestId: String(requestId),
+          success: false,
+          error: 'Invalid requestId format',
+        });
+        continue;
+      }
+
       try {
-        const approveProc = await sandbox.startProcess(`clawdbot devices approve ${device.requestId} --url ws://localhost:18789`);
+        const safeRequestId = shellEscapeArg(requestId);
+        const approveProc = await sandbox.startProcess(`clawdbot devices approve ${safeRequestId} --url ws://localhost:18789`);
         await waitForProcess(approveProc, CLI_TIMEOUT_MS);
 
         const approveLogs = await approveProc.getLogs();
         const success = approveLogs.stdout?.toLowerCase().includes('approved') || approveProc.exitCode === 0;
 
-        results.push({ requestId: device.requestId, success });
+        results.push({ requestId, success });
       } catch (err) {
         results.push({
-          requestId: device.requestId,
+          requestId,
           success: false,
           error: err instanceof Error ? err.message : 'Unknown error',
         });
